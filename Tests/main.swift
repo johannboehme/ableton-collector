@@ -13,5 +13,7 @@ if let i = args.firstIndex(of: "--search"), i + 1 < args.count {
 }
 
 let engine = CollectEngine(log: { print($0) })
-let stats = engine.run(folder: folder, options: options)
+let stats = args.contains("--split")
+    ? engine.runSplit(folder: folder, options: options)
+    : engine.run(folder: folder, options: options)
 print("STATS projects=\(stats.projects) copied=\(stats.copied) present=\(stats.alreadyPresent) viaSearch=\(stats.foundViaSearch) missing=\(stats.missing.count) errors=\(stats.errors.count)")

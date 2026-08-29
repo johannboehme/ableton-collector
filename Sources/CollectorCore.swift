@@ -171,6 +171,8 @@ struct CollectStats {
     var packRefs = 0          // Ableton Packs / Core Library (Typ 5/7)
     var untypedRefs = 0       // Referenzen ohne Pfadtyp (Typ 0)
     var unsupported = 0       // Dateiendung, die nicht eingesammelt wird
+    var internalCopied = 0    // Split: eigene Aufnahmen/Samples ins neue Projekt uebernommen
+    var createdProjects = 0   // Split: neu angelegte Projektordner
     var missing: [String] = []
     var errors: [String] = []
 }
@@ -233,11 +235,8 @@ final class CollectEngine {
         return stats
     }
 
-    private func processSet(_ setURL: URL, options: CollectOptions, stats: inout CollectStats) {
-        let fm = FileManager.default
-        let sessionDir = setURL.deletingLastPathComponent()
+    private func parseSet(_ setURL: URL, stats: inout CollectStats) -> FileRefParser? {
         let setName = setURL.deletingPathExtension().lastPathComponent
-
         let xmlData: Data
         do {
             let raw = try Data(contentsOf: setURL)
@@ -249,7 +248,7 @@ final class CollectEngine {
         } catch {
             log("⛔️ \(setName): Datei konnte nicht gelesen werden (\(error.localizedDescription))")
             stats.errors.append(setURL.path)
-            return
+            return nil
         }
 
         let parser = XMLParser(data: xmlData)
@@ -258,8 +257,17 @@ final class CollectEngine {
         guard parser.parse() || !delegate.refs.isEmpty else {
             log("⛔️ \(setName): Kein gueltiges Ableton-Set (XML nicht lesbar)")
             stats.errors.append(setURL.path)
-            return
+            return nil
         }
+        return delegate
+    }
+
+    private func processSet(_ setURL: URL, options: CollectOptions, stats: inout CollectStats) {
+        let fm = FileManager.default
+        let sessionDir = setURL.deletingLastPathComponent()
+        let setName = setURL.deletingPathExtension().lastPathComponent
+
+        guard let delegate = parseSet(setURL, stats: &stats) else { return }
 
         stats.projects += 1
         let versionText = delegate.majorVersion > 0 ? "Live \(delegate.majorVersion)" : "Live ?"
@@ -371,6 +379,187 @@ final class CollectEngine {
             log("   → \(seen.count) Sample-Referenz(en): " + parts.joined(separator: ", "))
         }
         log("")
+    }
+
+    // MARK: - Split: jedes Set im Ordner in ein eigenes Projekt ueberfuehren
+
+    /// .als-Dateien direkt im Ordner (nicht rekursiv)
+    func findDirectSets(in folder: URL) -> [URL] {
+        let fm = FileManager.default
+        let entries = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey],
+                                                   options: [.skipsHiddenFiles])) ?? []
+        return entries
+            .filter { $0.pathExtension.lowercased() == "als" }
+            .sorted { $0.path < $1.path }
+    }
+
+    func runSplit(folder: URL, options: CollectOptions) -> CollectStats {
+        var stats = CollectStats()
+        let sets = findDirectSets(in: folder)
+        if sets.isEmpty {
+            log("⚠️ Keine .als-Dateien direkt in diesem Ordner gefunden.")
+            return stats
+        }
+        log("\(sets.count) Live-Set(s) direkt im Ordner gefunden – jedes bekommt einen eigenen Projektordner.")
+        log(options.dryRun ? "🔍 Testlauf – es wird nichts angelegt oder kopiert.\n" : "")
+        for (i, set) in sets.enumerated() {
+            if isCancelled() { log("\nAbgebrochen."); break }
+            progress(i + 1, sets.count, set.deletingPathExtension().lastPathComponent)
+            processSplitSet(set, originFolder: folder, options: options, stats: &stats)
+        }
+        progress(sets.count, sets.count, "")
+        return stats
+    }
+
+    private func processSplitSet(_ setURL: URL, originFolder: URL, options: CollectOptions, stats: inout CollectStats) {
+        let fm = FileManager.default
+        let setName = setURL.deletingPathExtension().lastPathComponent
+        let projectName = "\(setName) Project"
+        let targetDir = originFolder.appendingPathComponent(projectName, isDirectory: true)
+
+        if fm.fileExists(atPath: targetDir.path) {
+            log("⏭  \(setName): Ordner \"\(projectName)\" existiert schon – übersprungen, um nichts zu überschreiben.\n")
+            return
+        }
+        guard let delegate = parseSet(setURL, stats: &stats) else { return }
+
+        stats.projects += 1
+        stats.createdProjects += 1
+        let versionText = delegate.majorVersion > 0 ? "Live \(delegate.majorVersion)" : "Live ?"
+        log("🎛  \(setName)  (\(versionText))  →  📁 \(projectName)")
+
+        if !options.dryRun {
+            do {
+                try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+                try fm.copyItem(at: setURL, to: targetDir.appendingPathComponent(setURL.lastPathComponent))
+            } catch {
+                log("   ⛔️ Projektordner konnte nicht angelegt werden (\(error.localizedDescription))\n")
+                stats.errors.append(setURL.path)
+                return
+            }
+        }
+
+        var seen = Set<String>()
+        var existingNames = Set<String>()
+        var local = (external: 0, internalCopied: 0, packs: 0, untyped: 0,
+                     unsupported: 0, missing: 0, present: 0)
+
+        for ref in delegate.refs {
+            guard seen.insert(ref.path.lowercased()).inserted else { continue }
+            let baseName = (ref.path as NSString).lastPathComponent
+
+            // Quelldatei relativ zum ALTEN Ordner aufloesen
+            let candidate = ref.path.hasPrefix("/")
+                ? URL(fileURLWithPath: ref.path)
+                : URL(fileURLWithPath: ref.path, relativeTo: originFolder).standardizedFileURL
+
+            switch ref.type {
+            case .pluginData, .builtin:
+                local.packs += 1
+                continue
+            case .na:
+                local.untyped += 1
+                log("   ❔ ohne Pfadtyp (übersprungen): \(ref.path)")
+                continue
+            case .currentProject:
+                // Eigene Aufnahmen/Samples: MUESSEN mit umziehen, Unterordner-Struktur erhalten
+                guard fm.fileExists(atPath: candidate.path) else {
+                    log("   ⚠️  eigenes Sample fehlt: \(baseName)  (\(ref.path))")
+                    stats.missing.append(ref.path)
+                    local.missing += 1
+                    continue
+                }
+                let originPrefix = originFolder.standardizedFileURL.path + "/"
+                let subPath: String
+                if candidate.standardizedFileURL.path.hasPrefix(originPrefix) {
+                    subPath = String(candidate.standardizedFileURL.path.dropFirst(originPrefix.count))
+                } else {
+                    subPath = "Samples/Collected/\(baseName)"
+                }
+                if copyInto(targetDir: targetDir, subPath: subPath, from: candidate,
+                            dryRun: options.dryRun, stats: &stats) {
+                    local.internalCopied += 1
+                    stats.internalCopied += 1
+                    existingNames.insert(baseName.lowercased())
+                }
+            case .external, .userLibrary:
+                let ext = (ref.path as NSString).pathExtension.lowercased()
+                guard let subFolder = targetFolder(forExtension: ext) else {
+                    local.unsupported += 1
+                    log("   ❔ Dateityp .\(ext) wird nicht eingesammelt: \(baseName)")
+                    continue
+                }
+                if existingNames.contains(baseName.lowercased()) {
+                    local.present += 1
+                    continue
+                }
+                var source: URL? = nil
+                var viaSearch = false
+                if fm.fileExists(atPath: candidate.path) {
+                    source = candidate
+                } else if let found = searchFallback(name: baseName, size: ref.size, options: options) {
+                    source = found
+                    viaSearch = true
+                }
+                guard let src = source else {
+                    log("   ⚠️  fehlt: \(baseName)  (\(ref.path))")
+                    stats.missing.append(ref.path)
+                    local.missing += 1
+                    continue
+                }
+                if copyInto(targetDir: targetDir, subPath: "\(subFolder)/\(baseName)", from: src,
+                            dryRun: options.dryRun, stats: &stats) {
+                    local.external += 1
+                    stats.copied += 1
+                    if viaSearch { stats.foundViaSearch += 1 }
+                    existingNames.insert(baseName.lowercased())
+                    if viaSearch { log("   ✅ \(options.dryRun ? "würde kopieren" : "kopiert"): \(baseName)  (über Suchordner gefunden)") }
+                }
+            }
+        }
+
+        stats.alreadyPresent += local.present
+        stats.packRefs += local.packs
+        stats.untypedRefs += local.untyped
+        stats.unsupported += local.unsupported
+
+        var parts: [String] = []
+        let verb = options.dryRun ? "würden" : ""
+        if local.external > 0 { parts.append("\(local.external) externe \(verb.isEmpty ? "kopiert" : "\(verb) kopiert")") }
+        if local.internalCopied > 0 { parts.append("\(local.internalCopied) eigene Samples \(verb.isEmpty ? "übernommen" : "\(verb) übernommen")") }
+        if local.present > 0 { parts.append("\(local.present) doppelt referenziert") }
+        if local.packs > 0 { parts.append("\(local.packs) aus Ableton Packs (nicht nötig)") }
+        if local.missing > 0 { parts.append("\(local.missing) unauffindbar") }
+        if local.untyped > 0 { parts.append("\(local.untyped) ohne Pfadtyp") }
+        if local.unsupported > 0 { parts.append("\(local.unsupported) nicht unterstützter Dateityp") }
+        if seen.isEmpty {
+            log("   ❔ Dieses Set enthält gar keine Sample-Referenzen.")
+        } else {
+            log("   → \(seen.count) Sample-Referenz(en): " + parts.joined(separator: ", "))
+        }
+        log("")
+    }
+
+    /// Kopiert eine Datei an targetDir/subPath (legt Zwischenordner an). true bei Erfolg.
+    private func copyInto(targetDir: URL, subPath: String, from src: URL,
+                          dryRun: Bool, stats: inout CollectStats) -> Bool {
+        let baseName = (subPath as NSString).lastPathComponent
+        if dryRun {
+            log("   🔍 würde kopieren: \(subPath)")
+            return true
+        }
+        let dest = targetDir.appendingPathComponent(subPath)
+        do {
+            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: src, to: dest)
+            log("   ✅ kopiert: \(subPath)")
+            return true
+        } catch {
+            log("   ⛔️ Kopieren fehlgeschlagen: \(baseName) (\(error.localizedDescription))")
+            stats.errors.append(src.path)
+            return false
+        }
     }
 
     private func searchFallback(name: String, size: UInt64, options: CollectOptions) -> URL? {

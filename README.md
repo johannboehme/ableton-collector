@@ -15,6 +15,8 @@ Ableton-Projektdateien (`.als`) **verlinken** Samples nur – beim Umzug auf ein
 3. kopiert fehlende Dateien in den jeweiligen Projektordner (`Samples/Collected` bzw. `Presets`),
 4. meldet alles, was nirgends mehr auffindbar ist – **bevor** man beim Umzug etwas vergisst.
 
+**Aufteilen:** Liegen mehrere `.als`-Dateien direkt nebeneinander in einem Ordner, kann jedes Set per Knopfdruck in einen eigenen Projektordner (`<Name> Project/`) überführt werden – inklusive aller zugehörigen Samples und **auch der eigenen Aufnahmen** (mit erhaltener Unterordner-Struktur, z. B. `Samples/Recorded/`). Gemeinsam genutzte Samples werden dabei bewusst dupliziert, damit jedes Projekt in sich geschlossen ist. Die Originale bleiben unverändert liegen.
+
 Optional kann ein **Suchordner** (z. B. die eigene Sample-Library) angegeben werden: Verschollene Samples werden dort per Dateiname (und Dateigröße, falls bekannt) wiedergefunden.
 
 **Wichtig:** Die `.als`-Dateien werden **niemals verändert**. Die Samples werden nur in den Projektordner kopiert – Ableton Live findet sie dort beim nächsten Öffnen über die automatische Suche im Projektordner selbst wieder.

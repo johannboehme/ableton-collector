@@ -14,7 +14,10 @@ struct AbletonCollectorApp: App {
 
 @MainActor
 final class CollectorViewModel: ObservableObject {
-    @Published var projectFolder: URL? = nil
+    @Published var projectFolder: URL? = nil {
+        didSet { updateDirectAlsCount() }
+    }
+    @Published var directAlsCount = 0
     @Published var searchFolder: URL? = nil
     @Published var logLines: [String] = []
     @Published var running = false
@@ -31,7 +34,19 @@ final class CollectorViewModel: ObservableObject {
 
     func cancel() { cancelled = true }
 
-    func start(dryRun: Bool) {
+    private func updateDirectAlsCount() {
+        guard let folder = projectFolder else { directAlsCount = 0; return }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir), isDir.boolValue else {
+            directAlsCount = 0
+            return
+        }
+        let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil,
+                                                                    options: [.skipsHiddenFiles])) ?? []
+        directAlsCount = entries.filter { $0.pathExtension.lowercased() == "als" }.count
+    }
+
+    func start(dryRun: Bool, split: Bool = false) {
         guard let folder = projectFolder, !running else { return }
         running = true
         cancelled = false
@@ -40,7 +55,9 @@ final class CollectorViewModel: ObservableObject {
         progressDone = 0
         progressTotal = 0
         currentSet = ""
-        appendLog(dryRun ? "🔍 Testlauf – es wird nichts kopiert.\n" : "🚀 Los geht's …\n")
+        if !split {
+            appendLog(dryRun ? "🔍 Testlauf – es wird nichts kopiert.\n" : "🚀 Los geht's …\n")
+        }
 
         let options = CollectOptions(dryRun: dryRun, searchFolder: searchFolder)
         let isCancelled: @Sendable () -> Bool = { [weak self] in
@@ -61,23 +78,32 @@ final class CollectorViewModel: ObservableObject {
                 }
             )
             engine.isCancelled = isCancelled
-            let stats = engine.run(folder: folder, options: options)
+            let stats = split
+                ? engine.runSplit(folder: folder, options: options)
+                : engine.run(folder: folder, options: options)
 
             DispatchQueue.main.async {
-                self.finish(stats: stats, dryRun: dryRun)
+                self.finish(stats: stats, dryRun: dryRun, split: split)
             }
         }
     }
 
-    private func finish(stats: CollectStats, dryRun: Bool) {
+    private func finish(stats: CollectStats, dryRun: Bool, split: Bool = false) {
         running = false
         currentSet = ""
+        updateDirectAlsCount()
         let verb = dryRun ? "würden kopiert" : "kopiert"
-        var lines = ["Fertig! \(stats.projects) Projekt(e) geprüft, \(stats.copied) Datei(en) \(verb)."]
+        var lines: [String]
+        if split {
+            let created = dryRun ? "würden angelegt" : "angelegt"
+            lines = ["Fertig! \(stats.createdProjects) Projektordner \(created), \(stats.copied) externe Datei(en) und \(stats.internalCopied) eigene Sample(s) \(verb)."]
+        } else {
+            lines = ["Fertig! \(stats.projects) Projekt(e) geprüft, \(stats.copied) Datei(en) \(verb)."]
+        }
         if stats.foundViaSearch > 0 {
             lines.append("\(stats.foundViaSearch) davon über den Suchordner wiedergefunden.")
         }
-        if stats.copied == 0 && stats.projects > 0 {
+        if stats.copied == 0 && stats.projects > 0 && !split {
             if stats.alreadyPresent > 0 || stats.internalRefs > 0 || stats.packRefs > 0 {
                 lines.append("Es gab nichts zu kopieren: \(stats.alreadyPresent + stats.internalRefs) Referenz(en) liegen schon in den Projektordnern, \(stats.packRefs) kommen aus Ableton Packs.")
             } else {
@@ -100,6 +126,7 @@ final class CollectorViewModel: ObservableObject {
 struct ContentView: View {
     @StateObject private var model = CollectorViewModel()
     @State private var dropTargeted = false
+    @State private var showSplitDialog = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -154,6 +181,24 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.projectFolder == nil || model.running)
+
+                if model.directAlsCount >= 2 {
+                    Button {
+                        showSplitDialog = true
+                    } label: {
+                        Label("In eigene Projekte aufteilen", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(model.running)
+                    .help("Macht aus jedem der \(model.directAlsCount) Live-Sets in diesem Ordner einen eigenen Projektordner mit allen zugehörigen Samples. Die Originale bleiben unverändert.")
+                    .confirmationDialog(
+                        "\(model.directAlsCount) Live-Sets gefunden. Für jedes wird ein eigener Ordner „<Name> Project“ angelegt und mit allen zugehörigen Samples befüllt – auch den eigenen Aufnahmen. Die Originale bleiben unverändert liegen.",
+                        isPresented: $showSplitDialog, titleVisibility: .visible
+                    ) {
+                        Button("Erst Testlauf") { model.start(dryRun: true, split: true) }
+                        Button("Aufteilen") { model.start(dryRun: false, split: true) }
+                        Button("Abbrechen", role: .cancel) {}
+                    }
+                }
 
                 Spacer()
             }
