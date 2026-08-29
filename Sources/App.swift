@@ -77,6 +77,13 @@ final class CollectorViewModel: ObservableObject {
         if stats.foundViaSearch > 0 {
             lines.append("\(stats.foundViaSearch) davon über den Suchordner wiedergefunden.")
         }
+        if stats.copied == 0 && stats.projects > 0 {
+            if stats.alreadyPresent > 0 || stats.internalRefs > 0 || stats.packRefs > 0 {
+                lines.append("Es gab nichts zu kopieren: \(stats.alreadyPresent + stats.internalRefs) Referenz(en) liegen schon in den Projektordnern, \(stats.packRefs) kommen aus Ableton Packs.")
+            } else {
+                lines.append("Es wurden gar keine Sample-Referenzen gefunden – Details siehe Protokoll.")
+            }
+        }
         if !stats.missing.isEmpty {
             lines.append("⚠️ \(stats.missing.count) Datei(en) wurden nirgends gefunden – Liste siehe Protokoll.")
             appendLog("\n––– Fehlende Dateien –––")

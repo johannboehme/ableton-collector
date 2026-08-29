@@ -167,6 +167,10 @@ struct CollectStats {
     var copied = 0
     var alreadyPresent = 0
     var foundViaSearch = 0
+    var internalRefs = 0      // projektinterne Aufnahmen/Samples (Typ 3)
+    var packRefs = 0          // Ableton Packs / Core Library (Typ 5/7)
+    var untypedRefs = 0       // Referenzen ohne Pfadtyp (Typ 0)
+    var unsupported = 0       // Dateiendung, die nicht eingesammelt wird
     var missing: [String] = []
     var errors: [String] = []
 }
@@ -214,7 +218,9 @@ final class CollectEngine {
             sets = findSets(in: folder)
         }
         if sets.isEmpty {
-            log("Keine .als-Dateien gefunden.")
+            log("⚠️ Keine .als-Dateien gefunden.")
+            log("   Mögliche Gründe: falscher Ordner ausgewählt – oder macOS hat der App den")
+            log("   Zugriff verweigert (Systemeinstellungen → Datenschutz & Sicherheit → Dateien und Ordner).")
             return stats
         }
         log("\(sets.count) Live-Set(s) gefunden.\n")
@@ -267,21 +273,38 @@ final class CollectEngine {
             }
         }
 
-        // Referenzen deduplizieren
+        // Referenzen deduplizieren, jede genau einem Topf zuordnen
         var seen = Set<String>()
-        var actionable = 0
+        var local = (internalRefs: 0, packs: 0, untyped: 0, unsupported: 0,
+                     present: 0, copied: 0, missing: 0)
         for ref in delegate.refs {
-            guard ref.type == .external || ref.type == .userLibrary else { continue }
             guard seen.insert(ref.path.lowercased()).inserted else { continue }
+            switch ref.type {
+            case .currentProject:
+                local.internalRefs += 1
+                continue
+            case .pluginData, .builtin:
+                local.packs += 1
+                continue
+            case .na:
+                local.untyped += 1
+                log("   ❔ ohne Pfadtyp (übersprungen): \(ref.path)")
+                continue
+            case .external, .userLibrary:
+                break
+            }
             let ext = (ref.path as NSString).pathExtension.lowercased()
-            guard let subFolder = targetFolder(forExtension: ext) else { continue }
+            guard let subFolder = targetFolder(forExtension: ext) else {
+                local.unsupported += 1
+                log("   ❔ Dateityp .\(ext) wird nicht eingesammelt: \((ref.path as NSString).lastPathComponent)")
+                continue
+            }
             let baseName = (ref.path as NSString).lastPathComponent
 
             if existingNames.contains(baseName.lowercased()) {
-                stats.alreadyPresent += 1
+                local.present += 1
                 continue
             }
-            actionable += 1
 
             // Quelldatei aufloesen
             var source: URL? = nil
@@ -299,6 +322,7 @@ final class CollectEngine {
             guard let src = source else {
                 log("   ⚠️  fehlt: \(baseName)  (\(ref.path))")
                 stats.missing.append(ref.path)
+                local.missing += 1
                 continue
             }
 
@@ -307,6 +331,7 @@ final class CollectEngine {
             if options.dryRun {
                 log("   🔍 wuerde kopieren: \(baseName)\(viaSearch ? "  (ueber Suchordner gefunden)" : "")")
                 stats.copied += 1
+                local.copied += 1
                 if viaSearch { stats.foundViaSearch += 1 }
                 existingNames.insert(baseName.lowercased())
                 continue
@@ -316,6 +341,7 @@ final class CollectEngine {
                 try fm.copyItem(at: src, to: dest)
                 existingNames.insert(baseName.lowercased())
                 stats.copied += 1
+                local.copied += 1
                 if viaSearch { stats.foundViaSearch += 1 }
                 log("   ✅ kopiert: \(baseName)\(viaSearch ? "  (ueber Suchordner gefunden)" : "")")
             } catch {
@@ -323,8 +349,26 @@ final class CollectEngine {
                 stats.errors.append(ref.path)
             }
         }
-        if actionable == 0 {
-            log("   nichts zu tun – alle Samples liegen bereits im Projekt")
+
+        stats.alreadyPresent += local.present
+        stats.internalRefs += local.internalRefs
+        stats.packRefs += local.packs
+        stats.untypedRefs += local.untyped
+        stats.unsupported += local.unsupported
+
+        // Bilanzzeile: jede Referenz taucht in genau einem Topf auf
+        var parts: [String] = []
+        if local.copied > 0 { parts.append(options.dryRun ? "\(local.copied) würden kopiert" : "\(local.copied) kopiert") }
+        if local.present > 0 { parts.append("\(local.present) schon im Projektordner") }
+        if local.internalRefs > 0 { parts.append("\(local.internalRefs) projektintern") }
+        if local.packs > 0 { parts.append("\(local.packs) aus Ableton Packs (nicht nötig)") }
+        if local.missing > 0 { parts.append("\(local.missing) unauffindbar") }
+        if local.untyped > 0 { parts.append("\(local.untyped) ohne Pfadtyp") }
+        if local.unsupported > 0 { parts.append("\(local.unsupported) nicht unterstützter Dateityp") }
+        if seen.isEmpty {
+            log("   ❔ Dieses Set enthält gar keine Sample-Referenzen.")
+        } else {
+            log("   → \(seen.count) Sample-Referenz(en): " + parts.joined(separator: ", "))
         }
         log("")
     }
