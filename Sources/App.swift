@@ -103,10 +103,10 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     folderRow(
                         icon: "folder.fill",
-                        title: "Projektordner",
-                        subtitle: "Ordner mit deinen Ableton-Projekten – auswählen oder einfach ins Fenster ziehen",
+                        title: "Projekte",
+                        subtitle: "Ordner mit allen Projekten – oder ein einzelnes Live-Set (.als) zum Ausprobieren",
                         url: model.projectFolder,
-                        required: true
+                        allowAlsFile: true
                     ) { model.projectFolder = $0 }
 
                     Divider()
@@ -116,7 +116,7 @@ struct ContentView: View {
                         title: "Suchordner (optional)",
                         subtitle: "z. B. deine Sample-Library – hier wird nach verschollenen Samples gesucht",
                         url: model.searchFolder,
-                        required: false
+                        allowAlsFile: false
                     ) { model.searchFolder = $0 }
                 }
                 .padding(6)
@@ -206,23 +206,16 @@ struct ContentView: View {
             guard let data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
-            let folder: URL
-            if isDir.boolValue {
-                folder = url
-            } else if url.pathExtension.lowercased() == "als" {
-                // Einzelnes Live-Set: dessen Projektordner verwenden
-                folder = url.deletingLastPathComponent()
-            } else {
-                return
-            }
-            DispatchQueue.main.async { model.projectFolder = folder }
+            // Ordner oder einzelnes Live-Set (.als)
+            guard isDir.boolValue || url.pathExtension.lowercased() == "als" else { return }
+            DispatchQueue.main.async { model.projectFolder = url }
         }
         return true
     }
 
     @ViewBuilder
     private func folderRow(icon: String, title: String, subtitle: String, url: URL?,
-                           required: Bool, onPick: @escaping (URL) -> Void) -> some View {
+                           allowAlsFile: Bool, onPick: @escaping (URL) -> Void) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon).frame(width: 22).foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 1) {
@@ -238,7 +231,10 @@ struct ContentView: View {
             Button(url == nil ? "Auswählen …" : "Ändern …") {
                 let panel = NSOpenPanel()
                 panel.canChooseDirectories = true
-                panel.canChooseFiles = false
+                panel.canChooseFiles = allowAlsFile
+                if allowAlsFile, let alsType = UTType(filenameExtension: "als") {
+                    panel.allowedContentTypes = [alsType]
+                }
                 panel.allowsMultipleSelection = false
                 panel.prompt = "Auswählen"
                 if panel.runModal() == .OK, let picked = panel.url {

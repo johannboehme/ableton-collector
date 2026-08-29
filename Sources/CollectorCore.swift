@@ -204,9 +204,16 @@ final class CollectEngine {
 
     func run(folder: URL, options: CollectOptions) -> CollectStats {
         var stats = CollectStats()
-        let sets = findSets(in: folder)
+        var isDir: ObjCBool = false
+        let sets: [URL]
+        if FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir), !isDir.boolValue {
+            // Einzelnes Live-Set direkt ausgewaehlt
+            sets = folder.pathExtension.lowercased() == "als" ? [folder] : []
+        } else {
+            sets = findSets(in: folder)
+        }
         if sets.isEmpty {
-            log("Keine .als-Dateien in diesem Ordner gefunden.")
+            log("Keine .als-Dateien gefunden.")
             return stats
         }
         log("\(sets.count) Live-Set(s) gefunden.\n")
