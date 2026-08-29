@@ -84,6 +84,7 @@ final class CollectorViewModel: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var model = CollectorViewModel()
+    @State private var dropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -103,7 +104,7 @@ struct ContentView: View {
                     folderRow(
                         icon: "folder.fill",
                         title: "Projektordner",
-                        subtitle: "Der Ordner mit deinen Ableton-Projekten (wird komplett durchsucht)",
+                        subtitle: "Ordner mit deinen Ableton-Projekten – auswählen oder einfach ins Fenster ziehen",
                         url: model.projectFolder,
                         required: true
                     ) { model.projectFolder = $0 }
@@ -119,14 +120,6 @@ struct ContentView: View {
                     ) { model.searchFolder = $0 }
                 }
                 .padding(6)
-            }
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                _ = providers.first?.loadObject(ofClass: URL.self) { url, _ in
-                    if let url, url.hasDirectoryPath {
-                        DispatchQueue.main.async { model.projectFolder = url }
-                    }
-                }
-                return true
             }
 
             HStack(spacing: 10) {
@@ -184,6 +177,47 @@ struct ContentView: View {
             }
         }
         .padding(16)
+        .overlay {
+            if dropTargeted {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.accentColor.opacity(0.12))
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                    Label("Ordner oder Live-Set hier fallen lassen", systemImage: "arrow.down.doc.fill")
+                        .font(.title3.bold())
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.background))
+                }
+                .padding(8)
+                .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) else {
+            return false
+        }
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+            guard let data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
+            let folder: URL
+            if isDir.boolValue {
+                folder = url
+            } else if url.pathExtension.lowercased() == "als" {
+                // Einzelnes Live-Set: dessen Projektordner verwenden
+                folder = url.deletingLastPathComponent()
+            } else {
+                return
+            }
+            DispatchQueue.main.async { model.projectFolder = folder }
+        }
+        return true
     }
 
     @ViewBuilder
