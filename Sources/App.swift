@@ -18,7 +18,9 @@ final class CollectorViewModel: ObservableObject {
     @Published var searchFolder: URL? = nil
     @Published var logLines: [String] = []
     @Published var running = false
-    @Published var progressText = ""
+    @Published var progressDone = 0
+    @Published var progressTotal = 0
+    @Published var currentSet = ""
     @Published var summary: String? = nil
     private var cancelled = false
 
@@ -35,7 +37,9 @@ final class CollectorViewModel: ObservableObject {
         cancelled = false
         logLines = []
         summary = nil
-        progressText = ""
+        progressDone = 0
+        progressTotal = 0
+        currentSet = ""
         appendLog(dryRun ? "🔍 Testlauf – es wird nichts kopiert.\n" : "🚀 Los geht's …\n")
 
         let options = CollectOptions(dryRun: dryRun, searchFolder: searchFolder)
@@ -48,8 +52,12 @@ final class CollectorViewModel: ObservableObject {
                 log: { line in
                     DispatchQueue.main.async { self.appendLog(line) }
                 },
-                progress: { done, total in
-                    DispatchQueue.main.async { self.progressText = "Projekt \(done) von \(total)" }
+                progress: { done, total, name in
+                    DispatchQueue.main.async {
+                        self.progressDone = done
+                        self.progressTotal = total
+                        self.currentSet = name
+                    }
                 }
             )
             engine.isCancelled = isCancelled
@@ -63,7 +71,7 @@ final class CollectorViewModel: ObservableObject {
 
     private func finish(stats: CollectStats, dryRun: Bool) {
         running = false
-        progressText = ""
+        currentSet = ""
         let verb = dryRun ? "würden kopiert" : "kopiert"
         var lines = ["Fertig! \(stats.projects) Projekt(e) geprüft, \(stats.copied) Datei(en) \(verb)."]
         if stats.foundViaSearch > 0 {
@@ -140,12 +148,29 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(model.projectFolder == nil || model.running)
 
-                if model.running {
-                    Button("Abbrechen") { model.cancel() }
-                    ProgressView().controlSize(.small)
-                    Text(model.progressText).font(.callout).foregroundStyle(.secondary)
-                }
                 Spacer()
+            }
+
+            if model.running {
+                VStack(alignment: .leading, spacing: 6) {
+                    if model.progressTotal > 0 {
+                        ProgressView(value: Double(model.progressDone), total: Double(model.progressTotal))
+                    } else {
+                        ProgressView().progressViewStyle(.linear) // Sets werden noch gezählt
+                    }
+                    HStack {
+                        Text(model.progressTotal > 0
+                             ? "Projekt \(model.progressDone) von \(model.progressTotal)\(model.currentSet.isEmpty ? "" : ":  \(model.currentSet)")"
+                             : "Suche Live-Sets …")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Abbrechen") { model.cancel() }
+                            .controlSize(.small)
+                    }
+                }
             }
 
             ScrollViewReader { proxy in

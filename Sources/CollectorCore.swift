@@ -178,12 +178,13 @@ struct CollectOptions {
 
 final class CollectEngine {
     let log: (String) -> Void
-    let progress: (Int, Int) -> Void
+    // (fertig, gesamt, Name des aktuellen Sets)
+    let progress: (Int, Int, String) -> Void
     var isCancelled: () -> Bool = { false }
 
     private var searchIndex: [String: [URL]]? = nil
 
-    init(log: @escaping (String) -> Void, progress: @escaping (Int, Int) -> Void = { _, _ in }) {
+    init(log: @escaping (String) -> Void, progress: @escaping (Int, Int, String) -> Void = { _, _, _ in }) {
         self.log = log
         self.progress = progress
     }
@@ -219,9 +220,10 @@ final class CollectEngine {
         log("\(sets.count) Live-Set(s) gefunden.\n")
         for (i, set) in sets.enumerated() {
             if isCancelled() { log("\nAbgebrochen."); break }
-            progress(i + 1, sets.count)
+            progress(i + 1, sets.count, set.deletingPathExtension().lastPathComponent)
             processSet(set, options: options, stats: &stats)
         }
+        progress(sets.count, sets.count, "")
         return stats
     }
 
