@@ -1,4 +1,4 @@
-# Ableton Collector
+# <img src="docs/icon.png" width="42" align="top" alt=""> Ableton Collector
 
 Native macOS-App, die **„Sammeln und Sichern" für alle Ableton-Live-Projekte auf einmal** erledigt – ohne Ableton zu öffnen und ohne durch jedes Projekt einzeln zu klicken.
 

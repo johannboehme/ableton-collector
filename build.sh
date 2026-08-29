@@ -25,7 +25,7 @@ lipo -create "$BUILD/AbletonCollector-arm64" "$BUILD/AbletonCollector-x86_64" \
   -output "$BUILD/AbletonCollector"
 
 echo "→ App-Icon …"
-swift Resources/make_icon.swift "$BUILD/AppIcon.iconset"
+swift Resources/make_icon.swift Resources/AppIcon-source.png "$BUILD/AppIcon.iconset"
 iconutil -c icns "$BUILD/AppIcon.iconset" -o "$BUILD/AppIcon.icns"
 
 echo "→ App-Bundle …"
